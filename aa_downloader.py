@@ -84,9 +84,9 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
                 
                 page_content = book_page_res.text
                 
-                # Look for download links (prioritizing epub/mobi, but taking any direct link)
-                # This regex is an improvement to try and capture actual download links more reliably
-                download_links = re.findall(r'(https?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+)'', page_content)
+                # Corrected regex to find download links (prioritizing epub/mobi, but taking any direct link)
+                # The issue was an unescaped quote in the regex pattern itself.
+                download_links = re.findall(r'(https?://(?:[a-zA-Z0-9$-_@.&+]|[!*(),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+)', page_content)
                 # Also check relative links that might be internal proxies, but less reliable for direct download
                 internal_links_raw = re.findall(r'href="(/get/[a-zA-Z0-9/.-]+)"', page_content)
                 internal_links = [base_url.rstrip('/') + link for link in internal_links_raw]
