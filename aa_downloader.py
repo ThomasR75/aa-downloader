@@ -5,18 +5,65 @@ import re
 import os
 import urllib.parse
 import sys
+import zipfile # For EPUB verification
 
 def sanitize_filename(filename):
     # Replace invalid characters with underscores
     s_filename = re.sub(r'[\\/:*?"<>|]', '_', filename)
     # Remove leading/trailing spaces, dots.
     s_filename = s_filename.strip()
-    # s_filename = s_filename.strip('.') # Removed this as it can remove valid extensions on multi-part titles
     # Replace sequences of underscores
     s_filename = re.sub(r'_+', '_', s_filename)
-    # Ensure it's not empty
+    # Ensure it's not empty, e.g., if title/author were all invalid chars
     if not s_filename: s_filename = "untitled"
     return s_filename
+
+def verify_epub(filepath):
+    """
+    Performs a more robust verification for EPUB files.
+    Checks for PK magic bytes and 'mimetype' file with 'application/epub+zip'.
+    """
+    if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+        return False
+    try:
+        with zipfile.ZipFile(filepath, 'r') as zf:
+            # Check for mimetype file
+            if 'mimetype' not in zf.namelist():
+                return False
+            # Check mimetype content
+            with zf.open('mimetype') as mime_file:
+                content = mime_file.read().decode('utf-8').strip()
+                if content == 'application/epub+zip':
+                    return True
+        return False
+    except zipfile.BadZipFile:
+        return False
+    except Exception as e:
+        print(f"Error during EPUB verification: {e}")
+        return False
+
+def verify_mobi(filepath):
+    """
+    Performs a basic verification for MOBI files by checking magic bytes.
+    MOBI files usually have 'BOOKMOBI' or a similar string at offset 0x3c (PalmDOC header).
+    More reliably, the magic string 'MOBI' is at offset 0x19 *after* the PalmDOC header.
+    We'll check for 'MOBI' at the more common offset after the first basic check.
+    """
+    if not os.path.exists(filepath) or os.path.getsize(filepath) < 256: # MOBI header is well into the file
+        return False
+    try:
+        with open(filepath, 'rb') as f_verify:
+            f_verify.seek(0x3C) # Offset to PalmDOC header for 'BOOKMOBI'
+            if f_verify.read(8) == b'BOOKMOBI': # Primary check: PalmDOC header type
+                f_verify.seek(0x130 - 0x10) # Offset for MOBI identifier in MOBI header itself (-16 as per spec sometimes)
+                # This could be more precise, but often MOBI is directly after
+                # A full spec read would be better, but we aim for simple detection.
+                return True
+        return False
+    except Exception as e:
+        print(f"Error during MOBI verification: {e}")
+        return False
+
 
 def search_and_download(base_url, input_csv_path, output_csv_filename="downloaded_books.csv", download_folder_name="downloads"):
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,10 +72,13 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
     if not os.path.exists(download_dir):
         os.makedirs(download_dir)
 
-    # === IMPORTANT: PASTE YOUR COOKIE STRING HERE ===
-    # Follow "Step 1" instructions above to get this string from your browser.
-    # Example: "session=YOUR_SESSION_ID; csrftoken=YOUR_CSRF_TOKEN;"
-    YOUR_ANNA_ARCHIVE_COOKIE_STRING = "" # <--- PASTE YOUR COOKIE STRING BETWEEN THESE QUOTES
+    # === IMPORTANT: READ COOKIE STRING FROM ENVIRONMENT VARIABLE ===
+    # Set ANNA_ARCHIVE_COOKIES environment variable before running the script.
+    # e.g., export ANNA_ARCHIVE_COOKIES="session=YOUR_SESSION_ID; csrftoken=YOUR_CSRF_TOKEN;"
+    YOUR_ANNA_ARCHIVE_COOKIE_STRING = os.environ.get("ANNA_ARCHIVE_COOKIES", "") 
+
+    if not YOUR_ANNA_ARCHIVE_COOKIE_STRING:
+        print("WARNING: ANNA_ARCHIVE_COOKIES environment variable not set. Fast downloads may fail due to lack of authentication.")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -66,8 +116,12 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
             query = f"{title} {author}"
             safe_query = urllib.parse.quote_plus(query)
             
-            search_url = f"{base_url.rstrip('/')}/search?q={safe_query}"
-            print(f"\\nSearching for: {query}")
+            # --- MODIFICATION START: Add Language Filtering ---
+            # Assuming 'lang' parameter works with comma-separated values for multiple languages
+            search_url = f"{base_url.rstrip('/')}/search?q={safe_query}&lang=en,de"
+            # --- MODIFICATION END ---
+            
+            print(f"\\nSearching for: {query} (Languages: English, German)")
             
             try:
                 response = requests.get(search_url, headers=headers, timeout=15)
@@ -99,7 +153,7 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
                 
                 page_content = book_page_res.text
                 
-                # --- MODIFICATION START: Prioritize /fast_download/ links ---
+                # --- Prioritize /fast_download/ links ---
                 
                 # 1. Extract relative /fast_download/ links
                 fast_download_links_raw = re.findall(r'href=\"(/fast_download/[a-f0-9/]+)\"', page_content)
@@ -123,29 +177,39 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
                 all_possible_download_urls = temp_urls
 
                 found_download_url = None
-                expected_extension = '.epub' # Default to epub
+                expected_extension = '.epub' # Default to epub for priority
 
+                # Prioritize EPUB/MOBI from fast download links
                 for dl_url in all_possible_download_urls:
-                    if "format=epub" in dl_url.lower() or dl_url.lower().endswith('.epub') or '.epub?' in dl_url.lower():
-                        found_download_url = dl_url
-                        expected_extension = '.epub'
-                        break
-                    if "format=mobi" in dl_url.lower() or dl_url.lower().endswith('.mobi') or '.mobi?' in dl_url.lower():
-                        found_download_url = dl_url
-                        expected_extension = '.mobi'
-                        break
+                    if "fast_download" in dl_url: # Only consider fast downloads for primary formats
+                        if "format=epub" in dl_url.lower() or dl_url.lower().endswith('.epub') or '.epub?' in dl_url.lower():
+                            found_download_url = dl_url
+                            expected_extension = '.epub'
+                            break
+                        if "format=mobi" in dl_url.lower() or dl_url.lower().endswith('.mobi') or '.mobi?' in dl_url.lower():
+                            found_download_url = dl_url
+                            expected_extension = '.mobi'
+                            break
                 
+                # Fallback: if no specific preferred format found, take the first fast download link available
                 if not found_download_url and fast_download_links_absolute:
                     found_download_url = fast_download_links_absolute[0]
-                    # Try to infer extension from URL if not explicitly found
+                    # Attempt to infer extension from the first fast_download link
                     if '.mobi' in found_download_url.lower() or 'format=mobi' in found_download_url.lower():
                          expected_extension = '.mobi'
+                    elif '.pdf' in found_download_url.lower() or 'format=pdf' in found_download_url.lower():
+                         expected_extension = '.pdf'
                     print(f"No explicit EPUB/MOBI fast download link found, trying first fast download link: {found_download_url}")
+                # Fallback: If still no URL, but other URLs exist, take the first one (e.g., /get/ links or external)
                 elif not found_download_url and all_possible_download_urls:
                     found_download_url = all_possible_download_urls[0]
+                    # Attempt to infer extension from the first general link
                     if '.mobi' in found_download_url.lower() or 'format=mobi' in found_download_url.lower():
                          expected_extension = '.mobi'
+                    elif '.pdf' in found_download_url.lower() or 'format=pdf' in found_download_url.lower():
+                         expected_extension = '.pdf'
                     print(f"No specific format found in fast downloads, trying first available download link from any source: {found_download_url}")
+                
 
                 if found_download_url:
                     print(f"Attempting download from: {found_download_url}")
@@ -154,40 +218,37 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
                         dl_res = requests.get(found_download_url, headers=headers, stream=True, timeout=30)
                         dl_res.raise_for_status()
 
-                        # --- MODIFICATION START: Unique Filenames and Verification ---
+                        # --- MODIFICATION START: Unique Filenames and Enhanced Verification ---
 
-                        # 1. Generate a base filename from Title and Author
                         base_filename_from_book = sanitize_filename(f"{title}_{author}")
                         
-                        # 2. Try to get filename from content-disposition header first
                         filename = None
                         cd = dl_res.headers.get('content-disposition', '')
                         if 'filename=' in cd:
                             match = re.findall('filename=\"?([^\"]+)\"?', cd)
                             if match:
-                                filename_from_cd = sanitize_filename(match[0])
-                                # Check if content-disposition filename has a reasonable extension
-                                if any(filename_from_cd.lower().endswith(ext) for ext in ['.epub', '.mobi', '.pdf', '.zip', '.rar', '.azw', '.azw3']):
-                                    filename = filename_from_cd
-                                else:
-                                    # If not, use the base filename and append expected extension
-                                    filename = f"{base_filename_from_book}{expected_extension}"
+                                filename_from_cd = match[0]
+                                # Heuristic: if content-disposition filename is just a hash (e.g., '0' or '123ABCD'), ignore it
+                                if not re.fullmatch(r'[a-f0-9]+', os.path.splitext(filename_from_cd)[0].lower()):
+                                    filename_from_cd = sanitize_filename(filename_from_cd)
+                                    # Ensure it has an extension, if not, append expected
+                                    if not any(filename_from_cd.lower().endswith(ext) for ext in ['.epub', '.mobi', '.pdf', '.zip', '.rar', '.azw', '.azw3']):
+                                        filename = f"{filename_from_cd}{expected_extension}"
+                                    else:
+                                        filename = filename_from_cd # Use as is if it has a good extension
                         
-                        # 3. Fallback to generated filename if not from header or empty/invalid after sanitization
                         if not filename:
                             filename = f"{base_filename_from_book}{expected_extension}"
-                            # Prevent extremely long filenames
-                            if len(filename) > 200:
+                            if len(filename) > 200: # Prevent extremely long filenames
                                 filename = f"{base_filename_from_book[:150]}{expected_extension}"
 
-                        # Ensure filename is not empty after all sanitization
-                        if not filename or filename == expected_extension: # Also check if it's just an empty extension
-                            filename = f"unknown_book_{target_md5_path.split('/')[-1]}{expected_extension}"
+                        if not filename or filename == expected_extension:
+                            # Final fallback: use MD5 hash from the book page URL
+                            filename = f"{target_md5_path.split('/')[-1]}{expected_extension}"
 
                         print(f"Determined filename: {filename}")
                         filepath = os.path.join(download_dir, filename)
                         
-                        # Handle potential filename collisions by appending a number
                         counter = 1
                         original_filepath_no_ext, original_ext = os.path.splitext(filepath)
                         while os.path.exists(filepath):
@@ -202,31 +263,28 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
                                 downloaded_size += len(chunk)
                                 f_dl.write(chunk)
                         
-                        # --- Download Verification (file content type check for EPUB) ---
-                        # A more robust content type check for EPUB could involve reading magic bytes
-                        # or using a dedicated library, which are beyond simple requests usage.
-                        # For now, we rely on non-zero size and inferred extension.
-                        
-                        if os.path.exists(filepath) and downloaded_size > 0:                            
-                            # Basic check if the file was likely an EPUB by reading a small part of its content
-                            is_epub = False
-                            if expected_extension == '.epub':
-                                try:
-                                    with open(filepath, 'rb') as f_verify:
-                                        # Check for EPUB magic string (PK zip header followed by mimetype application/epub+zip)
-                                        # A quick check for 'PK' which is zip archive header
-                                        if f_verify.read(2) == b'PK': 
-                                            # Further verification would involve checking mimetype in zip
-                                            is_epub = True
-                                except Exception as e:
-                                    print(f"Error verifying EPUB magic bytes: {e}")
+                        # --- Enhanced Verification ---
+                        file_is_valid = False
+                        file_status_msg = ""
 
-                            if expected_extension == '.epub' and not is_epub:
-                                print(f"WARNING: Downloaded {filename} has non-EPUB magic bytes or format mismatch. Size: {downloaded_size / (1024*1024):.2f} MB")
-                                writer.writerow({'Title': title, 'Author': author, 'Status': f'Downloaded (Potential Format Mismatch: {downloaded_size / (1024*1024):.2f} MB)', 'Filepath': filepath})
-                            else:
-                                print(f"Successfully downloaded: {filename} ({downloaded_size / (1024*1024):.2f} MB)")
+                        if os.path.exists(filepath) and downloaded_size > 0:
+                            if expected_extension == '.epub':
+                                file_is_valid = verify_epub(filepath)
+                                if not file_is_valid:
+                                    file_status_msg = " (EPUB verification failed)"
+                            elif expected_extension == '.mobi':
+                                file_is_valid = verify_mobi(filepath)
+                                if not file_is_valid:
+                                    file_status_msg = " (MOBI verification failed)"
+                            else: # For other formats, just check non-zero size
+                                file_is_valid = True
+
+                            if file_is_valid:
+                                print(f"Successfully downloaded and verified: {filename} ({downloaded_size / (1024*1024):.2f} MB)")
                                 writer.writerow({'Title': title, 'Author': author, 'Status': 'Success', 'Filepath': filepath})
+                            else:
+                                print(f"Download failed verification for {filename}{file_status_msg}. Size: {downloaded_size / (1024*1024):.2f} MB")
+                                writer.writerow({'Title': title, 'Author': author, 'Status': f'Download Failed (Verification{file_status_msg}: {downloaded_size / (1024*1024):.2f} MB)', 'Filepath': ''})
                         else:
                             print(f"Download failed for {filename}: File is empty or not created.")
                             writer.writerow({'Title': title, 'Author': author, 'Status': 'Download Failed (Empty File)', 'Filepath': ''})
