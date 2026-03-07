@@ -6,6 +6,16 @@ import os
 import urllib.parse
 import sys
 
+def sanitize_filename(filename):
+    # Replace invalid characters with underscores
+    s_filename = re.sub(r'[\\/:*?"<>|]', '_', filename)
+    # Remove leading/trailing spaces, dots.
+    s_filename = s_filename.strip()
+    s_filename = s_filename.strip('.')
+    # Replace sequences of underscores
+    s_filename = re.sub(r'_+', '_', s_filename)
+    return s_filename
+
 def search_and_download(base_url, input_csv_path, output_csv_filename="downloaded_books.csv", download_folder_name="downloads"):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     download_dir = os.path.join(os.getcwd(), download_folder_name)
@@ -13,18 +23,10 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
     if not os.path.exists(download_dir):
         os.makedirs(download_dir)
 
-    # You might need to add specific cookies if your access to fast downloads
-    # depends on being logged into Anna's Archive (e.g., from your browser).
-    # headers = {
-    #     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    #     "Referer": base_url,
-    #     "Cookie": "your_cookie_string_here" # example: "session=abcdef; csrftoken=12345"
-    # }
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": base_url
     }
-
 
     results = []
     
@@ -66,9 +68,6 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
                 
                 html = response.text
                 
-                # Extract MD5 link from search results. This still picks the first one found.
-                # A more robust solution would involve proper HTML parsing to associate MD5 link with format on search results.
-                # For now, we assume the first MD5 link leads to the correct book's detail page.
                 md5_matches = re.findall(r'href=\"(/md5/[a-f0-9]+)\"', html)
                 
                 if not md5_matches:
@@ -93,7 +92,6 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
                 # --- MODIFICATION START: Prioritize /fast_download/ links ---
                 
                 # 1. Extract relative /fast_download/ links
-                # Updated regex to be more specific to ensure it captures these
                 fast_download_links_raw = re.findall(r'href=\"(/fast_download/[a-f0-9/]+)\"', page_content)
                 fast_download_links_absolute = [base_url.rstrip('/') + link for link in fast_download_links_raw]
 
@@ -102,7 +100,6 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
                 get_links_absolute = [base_url.rstrip('/') + link for link in get_links_raw]
                 
                 # 3. Extract any other absolute HTTP/HTTPS links from the text (existing, broad)
-                # Keep this as a fallback but note its broader scope
                 other_absolute_links = re.findall(r'https?://(?:[a-zA-Z0-9$-_@.&+]|[!*(),/]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', page_content)
 
                 # Combine all possible download URLs, prioritizing fast downloads from the details page
@@ -111,68 +108,99 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
                 all_possible_download_urls.extend(get_links_absolute)
                 all_possible_download_urls.extend(other_absolute_links)
                 
-                # Remove duplicates while preserving order
                 temp_urls = []
                 [temp_urls.append(x) for x in all_possible_download_urls if x not in temp_urls]
                 all_possible_download_urls = temp_urls
 
                 found_download_url = None
-                # Iterate through prioritized URLs to find EPUB/MOBI
+                expected_extension = '.epub' # Default to epub
+
                 for dl_url in all_possible_download_urls:
                     if "format=epub" in dl_url.lower() or dl_url.lower().endswith('.epub') or '.epub?' in dl_url.lower():
                         found_download_url = dl_url
+                        expected_extension = '.epub'
                         break
                     if "format=mobi" in dl_url.lower() or dl_url.lower().endswith('.mobi') or '.mobi?' in dl_url.lower():
                         found_download_url = dl_url
+                        expected_extension = '.mobi'
                         break
                 
-                # Fallback: if no specific format found but there are fast download links, just take the first fast one
                 if not found_download_url and fast_download_links_absolute:
                     found_download_url = fast_download_links_absolute[0]
+                    # Try to infer extension from URL if not explicitly found
+                    if '.mobi' in found_download_url.lower() or 'format=mobi' in found_download_url.lower():
+                         expected_extension = '.mobi'
                     print(f"No explicit EPUB/MOBI fast download link found, trying first fast download link: {found_download_url}")
-                # Fallback: If still no URL, but other URLs exist, take the first one
                 elif not found_download_url and all_possible_download_urls:
                     found_download_url = all_possible_download_urls[0]
+                    if '.mobi' in found_download_url.lower() or 'format=mobi' in found_download_url.lower():
+                         expected_extension = '.mobi'
                     print(f"No specific format found in fast downloads, trying first available download link from any source: {found_download_url}")
-
 
                 if found_download_url:
                     print(f"Attempting download from: {found_download_url}")
                     
                     try:
                         dl_res = requests.get(found_download_url, headers=headers, stream=True, timeout=30)
-                        dl_res.raise_for_status() # Check for HTTP errors
+                        dl_res.raise_for_status()
 
+                        # --- MODIFICATION START: Unique Filenames and Verification ---
+
+                        # 1. Generate a base filename from Title and Author
+                        base_filename_from_book = sanitize_filename(f"{title}_{author}")
+                        
+                        # 2. Try to get filename from content-disposition header first
+                        filename = None
                         cd = dl_res.headers.get('content-disposition', '')
                         if 'filename=' in cd:
-                            filename = re.findall('filename=\"?([^\"]+)\"?', cd)[0]
-                        else:
-                            parsed_url = urllib.parse.urlparse(found_download_url)
-                            path_segments = parsed_url.path.split('/')
-                            filename = path_segments[-1] if path_segments[-1] else f"{title}_{author}.epub"
-                            # Ensure filename has a valid extension if not found
-                            if not (filename.lower().endswith(('.epub', '.mobi', '.pdf', '.zip', '.rar', '.azw', '.azw3'))):
-                                # Heuristic: derive extension from the URL if possible
-                                if any(ext in found_download_url.lower() for ext in ['epub', 'mobi', 'pdf', 'zip', 'rar', 'azw', 'azw3']):
-                                    filename = f"{filename}.{next((ext for ext in ['epub', 'mobi', 'pdf', 'zip', 'rar', 'azw', 'azw3'] if ext in found_download_url.lower()), 'epub')}"
-                                else:
-                                     filename = f"{filename}.epub" # Default fallback
-                        
-                        # Sanitize filename (existing logic)
-                        filename = "".join(c for c in filename if c.isalnum() or c in ('.', '_', '-')).strip()
-                        if filename.startswith('.'): filename = filename[1:]
-                        if not filename: filename = f"{title}_{author}.epub" # Final fallback
+                            match = re.findall('filename=\"?([^\"]+)\"?', cd)
+                            if match:
+                                filename = sanitize_filename(match[0])
+                                # Ensure it has an extension, if not, append expected
+                                if not any(filename.lower().endswith(ext) for ext in ['.epub', '.mobi', '.pdf', '.zip', '.rar', '.azw', '.azw3']):
+                                    filename = f"{filename}{expected_extension}"
+
+                        # 3. Fallback to generated filename if not from header or empty after sanitization
+                        if not filename:
+                            filename = f"{base_filename_from_book}{expected_extension}"
+                            # Prevent extremely long filenames
+                            if len(filename) > 200:
+                                filename = f"{base_filename_from_book[:150]}{expected_extension}"
+
+                        # Ensure filename is not empty after all sanitization
+                        if not filename:
+                            filename = f"unknown_book_{target_md5_path.split('/')[-1]}{expected_extension}"
+
 
                         filepath = os.path.join(download_dir, filename)
                         
+                        # Handle potential filename collisions by appending a number
+                        counter = 1
+                        original_filepath = filepath
+                        while os.path.exists(filepath):
+                            name, ext = os.path.splitext(original_filepath)
+                            filepath = f"{name}_{counter}{ext}"
+                            counter += 1
+
+                        print(f"Saving to: {filepath}")
+
+                        downloaded_size = 0
                         with open(filepath, 'wb') as f_dl:
                             for chunk in dl_res.iter_content(chunk_size=8192):
+                                downloaded_size += len(chunk)
                                 f_dl.write(chunk)
                         
-                        print(f"Successfully downloaded: {filename}")
-                        writer.writerow({'Title': title, 'Author': author, 'Status': 'Success', 'Filepath': filepath})
+                        # --- Download Verification (non-zero size) ---
+                        if os.path.exists(filepath) and downloaded_size > 0:
+                            print(f"Successfully downloaded: {filename} ({downloaded_size / (1024*1024):.2f} MB)")
+                            writer.writerow({'Title': title, 'Author': author, 'Status': 'Success', 'Filepath': filepath})
+                        else:
+                            print(f"Download failed for {filename}: File is empty or not created.")
+                            writer.writerow({'Title': title, 'Author': author, 'Status': 'Download Failed (Empty File)', 'Filepath': ''})
+
+                        # --- MODIFICATION END ---
+
                     except requests.exceptions.HTTPError as http_err:
-                        # Specifically catch HTTP 403 Forbidden for membership requirement
                         if http_err.response.status_code == 403:
                             print(f"Download from {found_download_url} failed: 403 Forbidden. Membership/login might be required or the link expired.")
                             writer.writerow({'Title': title, 'Author': author, 'Status': 'Download Failed (403 Forbidden)', 'Filepath': ''})
