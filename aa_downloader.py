@@ -28,7 +28,7 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
     # === IMPORTANT: PASTE YOUR COOKIE STRING HERE ===
     # Follow "Step 1" instructions above to get this string from your browser.
     # Example: "session=YOUR_SESSION_ID; csrftoken=YOUR_CSRF_TOKEN;"
-    YOUR_ANNA_ARCHIVE_COOKIE_STRING = "" # <--- PASTE YOUR COOKIE STRING BETWEEN THESE QUOTES
+    YOUR_ANNA_ARCHIVE_COOKIE_STRING = "__ddg1_=FuORYFoJVn26jKAK5JqF; aa_account_id2=eyJhIjoiTmdwZHdOdSIsImlhdCI6MTc3MjQ1NjA5OX0.iumiNpCyR9tPV2lWgJ-9Lm5u5bKIbAHRdDUSeePLd20; __ddg9_=59.142.103.100; __ddg10_=1772878684; __ddg8_=ER4znPSUYR8qpw7H" # <--- PASTE YOUR COOKIE STRING BETWEEN THESE QUOTES
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
