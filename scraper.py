@@ -71,5 +71,16 @@ def scrape_goodreads_shelf_expanded(user_id, shelf_name="to-get", output_file="g
         print("No books found.")
 
 if __name__ == "__main__":
-    user_id = "25519145"
-    scrape_goodreads_shelf_expanded(user_id, max_books=1001)
+    import sys
+    print("\n--- Goodreads Shelf Scraper ---")
+    print("This script scrapes books from a Goodreads shelf and saves them to a CSV file.")
+
+    user_id = input("\nEnter your Goodreads user ID (found in your profile URL, e.g., 25519145): ").strip()
+    if not user_id:
+        print("Goodreads user ID cannot be empty. Exiting.")
+        sys.exit(1)
+
+    shelf = input("Enter the shelf name to scrape (default: to-get): ").strip() or "to-get"
+    output_file = input("Enter the output CSV filename (default: goodreads_to_get.csv): ").strip() or "goodreads_to_get.csv"
+
+    scrape_goodreads_shelf_expanded(user_id, shelf_name=shelf, output_file=output_file, max_books=1001)

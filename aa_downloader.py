@@ -65,27 +65,16 @@ def verify_mobi(filepath):
         return False
 
 
-def search_and_download(base_url, input_csv_path, output_csv_filename="downloaded_books.csv", download_folder_name="downloads"):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+def search_and_download(base_url, input_csv_path, cookie_string="", output_csv_filename="downloaded_books.csv", download_folder_name="downloads"):
     download_dir = os.path.join(os.getcwd(), download_folder_name)
 
     if not os.path.exists(download_dir):
         os.makedirs(download_dir)
 
-<<<<<<< HEAD
-    # === IMPORTANT: READ COOKIE STRING FROM ENVIRONMENT VARIABLE ===
-    # Set ANNA_ARCHIVE_COOKIES environment variable before running the script.
-    # e.g., export ANNA_ARCHIVE_COOKIES="session=YOUR_SESSION_ID; csrftoken=YOUR_CSRF_TOKEN;"
-    YOUR_ANNA_ARCHIVE_COOKIE_STRING = os.environ.get("ANNA_ARCHIVE_COOKIES", "") 
+    YOUR_ANNA_ARCHIVE_COOKIE_STRING = cookie_string or os.environ.get("ANNA_ARCHIVE_COOKIES", "")
 
     if not YOUR_ANNA_ARCHIVE_COOKIE_STRING:
-        print("WARNING: ANNA_ARCHIVE_COOKIES environment variable not set. Fast downloads may fail due to lack of authentication.")
-=======
-    # === IMPORTANT: PASTE YOUR COOKIE STRING HERE ===
-    # Follow "Step 1" instructions above to get this string from your browser.
-    # Example: "session=YOUR_SESSION_ID; csrftoken=YOUR_CSRF_TOKEN;"
-    YOUR_ANNA_ARCHIVE_COOKIE_STRING = "" # <--- PASTE YOUR COOKIE STRING BETWEEN THESE QUOTES
->>>>>>> 47cb63496a1efa3fba6049065082bbd5d0097964
+        print("WARNING: No cookie provided. Fast downloads may fail due to lack of authentication.")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -326,17 +315,23 @@ def search_and_download(base_url, input_csv_path, output_csv_filename="downloade
             time.sleep(5)
 
 if __name__ == "__main__":
-    print("\\n--- Anna's Archive Downloader ---")
+    print("\n--- Anna's Archive Downloader ---")
     print("This script downloads books from Anna's Archive based on a CSV list.")
-    
-    anna_archive_url = input("Please enter the base URL for Anna's Archive (e.g., https://annas-archive.gl/): ").strip()
+
+    anna_archive_url = input("\nEnter the base URL for Anna's Archive (e.g., https://annas-archive.gl/): ").strip()
     if not anna_archive_url:
         print("Anna's Archive URL cannot be empty. Exiting.")
         sys.exit(1)
-    
-    input_csv = input("Please enter the name of your input CSV file (e.g., goodreads_to_get.csv): ").strip()
+
+    input_csv = input("Enter the path to your input CSV file (e.g., goodreads_to_get.csv): ").strip()
     if not input_csv:
         print("Input CSV filename cannot be empty. Exiting.")
         sys.exit(1)
 
-    search_and_download(anna_archive_url, input_csv)
+    print("\nOptional: Paste your Anna's Archive cookie string for authenticated (fast) downloads.")
+    print("To get your cookie: open Anna's Archive in your browser, log in, open DevTools (F12),")
+    print("go to Network tab, make any request, find the Cookie header, and copy its value.")
+    print("Leave blank to skip (free/slow downloads only).")
+    cookie = input("Cookie string: ").strip()
+
+    search_and_download(anna_archive_url, input_csv, cookie_string=cookie)
