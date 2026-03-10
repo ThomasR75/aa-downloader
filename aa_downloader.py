@@ -157,6 +157,19 @@ def search_and_download(base_url, input_csv_path, cookie_string="", output_csv_f
 
                     page_content = book_page_res.text
 
+                    # Verify language from book detail page before downloading
+                    lang_match = re.search(r'<div[^>]*>\s*Language\s*</div>\s*<div[^>]*>([^<]+)</div>', page_content, re.IGNORECASE)
+                    if not lang_match:
+                        # Try alternate pattern used on some pages
+                        lang_match = re.search(r'"language"\s*:\s*"([^"]+)"', page_content, re.IGNORECASE)
+                    if lang_match:
+                        book_lang = lang_match.group(1).strip().lower()
+                        allowed_langs = {"english", "en", "german", "de", "deutsch"}
+                        if book_lang not in allowed_langs:
+                            print(f"Skipping result {attempt}: language '{book_lang}' is not English or German.")
+                            continue
+                        print(f"Language check passed: '{book_lang}'")
+
                     # 1. Extract relative /fast_download/ links
                     fast_download_links_raw = re.findall(r'href=\"(/fast_download/[a-f0-9/]+)\"', page_content)
                     fast_download_links_absolute = [base_url.rstrip('/') + link for link in fast_download_links_raw]
